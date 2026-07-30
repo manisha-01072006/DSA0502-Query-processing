@@ -1,0 +1,10 @@
+import re
+
+pincode = input("Enter PIN Code: ")
+
+pattern = r'^[1-9][0-9]{5}$'
+
+if re.fullmatch(pattern, pincode):
+    print("Valid PIN Code")
+else:
+    print("Invalid PIN Code")
