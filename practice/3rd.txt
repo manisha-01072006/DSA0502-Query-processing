@@ -1,0 +1,14 @@
+import re
+
+paragraph = input("Enter a paragraph: ")
+
+pattern = r'https?://[^\s]+'
+
+urls = re.findall(pattern, paragraph)
+
+if urls:
+    print("URLs found:")
+    for url in urls:
+        print(url)
+else:
+    print("No URLs found.")
