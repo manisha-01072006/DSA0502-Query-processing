@@ -1,0 +1,191 @@
+import sqlite3
+import re
+from difflib import SequenceMatcher
+ 
+# 4.1 Connect to SQLite
+conn = sqlite3.connect("hospital.db")
+cursor = conn.cursor()
+ 
+# 4.2 Create Patient table
+cursor.execute("""
+CREATE TABLE IF NOT EXISTS Patient (
+    Patient_ID INTEGER PRIMARY KEY,
+    Name TEXT NOT NULL,
+    Age INTEGER,
+    Gender TEXT,
+    Phone TEXT,
+    Email TEXT,
+    Diagnosis TEXT
+)
+""")
+conn.commit()
+ 
+# 4.3 Insert fictional dirty patient records
+dirty_patients = [
+    (1,  "RAHUL kumar",    34,  "male",   "9876543210",   "rahul@gmail.com",        "Diabetes"),
+    (2,  " rahul KUMAR ",  34,  "MALE",   "9876543210",   "rahul@gmail.com",        "Diabetes"),
+    (3,  "Priya Sharma",   28,  "female", "98-7654-3211", "priya.sharma@yahoo.com", "Hypertension"),
+    (4,  "priya  sharma",  28,  "Female", "9876543211",   "priya.sharma@yahoo.com", "Hypertension"),
+    (5,  "Arjun Nair",     -5,  "Male",   "9123456780",   "arjun.nair@gmail.com",   "Asthma"),
+    (6,  "Divya Menon",    150, "female", "9988776655",   "divya@gmail",            "Migraine"),
+    (7,  "Karthik Raj",    45,  "M",      "12345",        "karthik.raj@gmail.com",  "Cardiac"),
+    (8,  "Sneha Reddy",    31,  "F",      "",             "sneha.reddy@gmail.com",  "Fracture"),
+    (9,  "Vijay Kumar",    52,  "male",   "9012345678",   "",                       "Diabetes"),
+    (10, "RAHUL KUMER",    34,  "Male",   "9876543210",   "rahul.kumar@gmail.com",  "Diabetes"),
+    (11, "Anitha Raman",   39,  "Female", "9345678123",   "anitha.raman@gmail.com", "Thyroid"),
+    (12, "Anitha Raman",   39,  "Female", "9345678123",   "anitha.raman@gmail.com", "Thyroid"),
+    (13, "anitha  RAMAN",  39,  "female", "9345678123",   "anitha.raman@gmail.com", "Thyroid"),
+]
+ 
+cursor.executemany(
+    "INSERT INTO Patient VALUES (?, ?, ?, ?, ?, ?, ?)", dirty_patients
+)
+conn.commit()
+ 
+# 4.4 Data cleaning and validation functions
+ 
+def normalize_name(name):
+    cleaned = re.sub(r"\s+", " ", name.strip())
+    return cleaned.title()
+ 
+ 
+def standardize_gender(gender):
+    g = gender.strip().lower()
+    if g in ("male", "m"):
+        return "Male"
+    if g in ("female", "f"):
+        return "Female"
+    return "Unknown"
+ 
+ 
+def is_valid_age(age):
+    return isinstance(age, int) and 0 <= age <= 120
+ 
+ 
+PHONE_REGEX = re.compile(r"^[6-9]\d{9}$")
+ 
+def is_valid_phone(phone):
+    if not phone:
+        return False
+    digits_only = re.sub(r"\D", "", phone)
+    return bool(PHONE_REGEX.match(digits_only))
+ 
+ 
+EMAIL_REGEX = re.compile(r"^[\w.+-]+@[\w-]+\.[A-Za-z]{2,}$")
+ 
+def is_valid_email(email):
+    if not email:
+        return False
+    return bool(EMAIL_REGEX.match(email))
+ 
+ 
+# 5.1 Exact duplicate detection
+def find_exact_duplicates(rows):
+    seen = {}
+    duplicates = []
+    for row in rows:
+        pid, name, age, gender, phone, email, diagnosis = row
+        key = (name.strip().lower(), age, gender.strip().lower(),
+               phone.strip(), email.strip().lower())
+        if key in seen:
+            duplicates.append((seen[key], pid))
+        else:
+            seen[key] = pid
+    return duplicates
+ 
+ 
+# 5.2 Fuzzy duplicate detection
+def name_similarity(a, b):
+    return round(SequenceMatcher(None, a.lower(), b.lower()).ratio() * 100, 2)
+ 
+ 
+def find_fuzzy_duplicates(rows, name_threshold=85):
+    candidates = []
+    for i in range(len(rows)):
+        for j in range(i + 1, len(rows)):
+            r1, r2 = rows[i], rows[j]
+            sim = name_similarity(r1[1], r2[1])
+            contact_match = (r1[4].strip() == r2[4].strip() and r1[4].strip() != "") or \
+                             (r1[5].strip().lower() == r2[5].strip().lower() and r1[5].strip() != "")
+            if sim >= name_threshold and contact_match:
+                candidates.append((r1[0], r2[0], sim, "Potential Duplicate"))
+    return candidates
+ 
+ 
+# 6. Create Clean_Patient and load cleaned records
+cursor.execute("""
+CREATE TABLE IF NOT EXISTS Clean_Patient (
+    Patient_ID INTEGER PRIMARY KEY,
+    Name TEXT NOT NULL,
+    Age INTEGER,
+    Gender TEXT,
+    Phone TEXT,
+    Email TEXT,
+    Diagnosis TEXT
+)
+""")
+conn.commit()
+ 
+ 
+def clean_and_load(rows):
+    cursor.execute("DELETE FROM Clean_Patient")
+    exact_dupe_ids = {d[1] for d in find_exact_duplicates(rows)}
+    inserted_keys = set()
+ 
+    for row in rows:
+        pid, name, age, gender, phone, email, diagnosis = row
+        if pid in exact_dupe_ids:
+            continue
+ 
+        clean_name = normalize_name(name)
+        clean_gender = standardize_gender(gender)
+        clean_phone = re.sub(r"\D", "", phone) if phone else ""
+        clean_email = email.strip() if is_valid_email(email) else ""
+ 
+        key = (clean_name.lower(), clean_phone)
+        if key in inserted_keys:
+            continue
+        inserted_keys.add(key)
+ 
+        age_value = age if is_valid_age(age) else None
+        phone_value = clean_phone if is_valid_phone(phone) else None
+ 
+        cursor.execute(
+            "INSERT INTO Clean_Patient VALUES (?, ?, ?, ?, ?, ?, ?)",
+            (pid, clean_name, age_value, clean_gender,
+             phone_value, clean_email or None, diagnosis),
+        )
+    conn.commit()
+ 
+ 
+clean_and_load(dirty_patients)
+ 
+# 7.3 SELECT
+cursor.execute("SELECT * FROM Clean_Patient WHERE Age IS NULL OR Phone IS NULL")
+for record in cursor.fetchall():
+    print(record)
+ 
+# 7.4 UPDATE
+cursor.execute("UPDATE Clean_Patient SET Gender = ? WHERE Patient_ID = ?", ("Male", 7))
+conn.commit()
+ 
+# 7.5 DELETE
+cursor.execute("DELETE FROM Patient WHERE Patient_ID = ?", (12,))
+conn.commit()
+ 
+# 9. Test with a new, previously unseen dirty dataset
+new_dirty_patients = [
+    (101, "  suresh BABU",  29,  "male",   "9876501234", "suresh.babu@gmail.com", "Fever"),
+    (102, "Suresh Babu",    29,  "Male",   "9876501234", "suresh.babu@gmail.com", "Fever"),
+    (103, "Meena Iyer",     200, "female", "9876512345", "meena.iyer@gmail.com",  "Ortho"),
+    (104, "Kiran Das",      -10, "male",   "9876523456", "kiran.das@gmail.com",   "ENT"),
+    (105, "Lakshmi N",      41,  "F",      "98765",      "lakshmi.n@gmail.com",   "Dermatology"),
+    (106, "Ramesh Babu",    33,  "M",      "9876534567", "",   "General"),
+    (107, "Meena  Iyerr",   40,  "Female", "9876512345", "meena.iyer@gmail.com",  "Ortho"),
+]
+ 
+clean_and_load(new_dirty_patients)
+print("Exact duplicates:", find_exact_duplicates(new_dirty_patients))
+print("Fuzzy duplicates:", find_fuzzy_duplicates(new_dirty_patients))
+ 
+conn.close()
